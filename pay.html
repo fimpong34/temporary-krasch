@@ -4068,11 +4068,7 @@
       const receiptBtn = document.querySelector('.m2-receipt-btn');
       if (receiptBtn) {
         receiptBtn.addEventListener('click', () => {
-          successEl.classList.add('m2-hidden');
-          successEl.classList.remove('m2-slide-start');
-          if (successMenu) successMenu.classList.remove('show');
-          if (typeof resetMode3FaceId === 'function') resetMode3FaceId();
-          openReceiptSheet();
+          window.location.assign('activty.html');
         });
       }
       if (receiptBackdrop) receiptBackdrop.addEventListener('click', closeReceiptSheet);
