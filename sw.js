@@ -1,6 +1,6 @@
 // Keep the app shell local after the first visit so navigation does not wait
 // for the network, CDN, or a server response.
-const CACHE_NAME = 'cashapp-shell-v3';
+const CACHE_NAME = 'cashapp-shell-v4';
 const APP_SHELL = [
   './',
   './index.html',
