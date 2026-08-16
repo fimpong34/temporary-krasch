@@ -8,7 +8,7 @@
   'use strict';
 
   // Pages that belong to the app shell (bottom-nav pages)
-  const APP_PAGES = ['home.html', 'card.html', 'index.html', 'activty.html', 'activity.html', 'profile.html', 'contact-pay.html'];
+  const APP_PAGES = ['home.html', 'card.html', 'pay.html', 'activty.html', 'activity.html', 'profile.html', 'contact-pay.html'];
 
   // Track whether we're currently in a transition to block double-taps
   let transitioning = false;

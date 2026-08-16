@@ -1,19 +1,26 @@
 // Keep the app shell local after the first visit so navigation does not wait
 // for the network, CDN, or a server response.
-const CACHE_NAME = 'cashapp-shell-v2';
+const CACHE_NAME = 'cashapp-shell-v3';
 const APP_SHELL = [
   './',
   './index.html',
+  './pay.html',
   './home.html',
   './contact-pay.html',
   './activty.html',
   './card.html',
   './profile.html',
+  './article.html',
   './savings.html',
   './saving.css',
   './dark-mode.js',
   './footer.display.js',
   './nav-performance.js',
+  './guard.js',
+  './site.webmanifest',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './icons/apple-touch-icon.png',
   './font/CashSans.ttf'
 ];
 
@@ -43,7 +50,7 @@ self.addEventListener('fetch', (event) => {
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
           return response;
         })
-        .catch(() => caches.match('./index.html')))
+        .catch(() => caches.match('./pay.html')))
     );
     return;
   }

@@ -17,7 +17,7 @@
   // from competing with the page that the user is currently opening.
   const warmPages = () => {
     if (navigator.connection && navigator.connection.saveData) return;
-    ['index.html', 'home.html', 'contact-pay.html', 'activty.html'].forEach((href) => {
+    ['pay.html', 'home.html', 'contact-pay.html', 'activty.html'].forEach((href) => {
       const link = document.createElement('link');
       link.rel = 'prefetch';
       link.as = 'document';

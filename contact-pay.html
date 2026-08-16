@@ -7,18 +7,19 @@
       content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0"
     />
     <meta name="theme-color" content="#0f8038" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <meta name="apple-mobile-web-app-title" content="Cash Mode" />
-    <link rel="manifest" href="site.webmanifest" />
-    <link rel="prefetch" href="index.html" as="document" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <link rel="prefetch" href="pay.html" as="document" />
     <link
       rel="icon"
       type="image/png"
       sizes="192x192"
-      href="icons/Cash_App-Logo.wine.png"
+      href="/icons/icon-192.png"
     />
-    <link rel="apple-touch-icon" href="icons/Cash_App-Logo.wine.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
     <script>
       (() => {
         const KEY = "cashAppDarkMode";
@@ -863,7 +864,7 @@
     <div class="container">
       <div class="fixed-top-content">
         <header class="header">
-          <a href="index.html"><button class="close-btn">×</button></a>
+          <a href="pay.html"><button class="close-btn">×</button></a>
           <div class="amount" id="amount">$547</div>
           <button class="pay-btn" id="payBtn">Pay</button>
         </header>
@@ -2365,21 +2366,21 @@
           document.head.appendChild(link);
         }
 
-        warmNavigation("index.html");
+        warmNavigation("pay.html");
 
         ["pointerdown", "mouseenter", "touchstart"].forEach((eventName) => {
           successDoneBtn.addEventListener(
             eventName,
             () => {
-              warmNavigation("index.html");
+              warmNavigation("pay.html");
             },
             { passive: true }
           );
         });
 
         successDoneBtn.addEventListener("click", () => {
-          warmNavigation("index.html");
-          window.location.replace("index.html");
+          warmNavigation("pay.html");
+          window.location.replace("pay.html");
         });
       });
     </script>

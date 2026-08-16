@@ -6,8 +6,16 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
     />
+    <meta name="theme-color" content="#00d632" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Cash Mode" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
     <title>Activity - Cash App</title>
-    <link rel="prefetch" href="index.html" as="document" />
+    <link rel="prefetch" href="pay.html" as="document" />
     <link rel="prefetch" href="home.html" as="document" />
     <link rel="prefetch" href="card.html" as="document" />
     <link rel="preload" href="font/CashSans.ttf" as="font" type="font/ttf" crossorigin />
@@ -16,7 +24,7 @@
         "prerender": [
           {
             "source": "list",
-            "urls": ["index.html", "home.html", "card.html"]
+            "urls": ["pay.html", "home.html", "card.html"]
           }
         ]
       }
@@ -677,18 +685,6 @@
   </head>
   <body>
     <div class="activity-container">
-      <meta name="theme-color" content="#00d632" />
-      <meta name="apple-mobile-web-app-capable" content="yes" />
-      <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-      <meta name="apple-mobile-web-app-title" content="Cash Mode" />
-      <link rel="manifest" href="site.webmanifest" />
-      <link
-        rel="icon"
-        type="image/png"
-        sizes="192x192"
-        href="icons/Cash_App-Logo.wine.png"
-      />
-      <link rel="apple-touch-icon" href="icons/Cash_App-Logo.wine.png" />
       <header class="activity-header">
         <h1>Activity</h1>
         <a href="profile.html" class="profile-icon-link" id="profile-link">
