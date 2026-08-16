@@ -1191,8 +1191,29 @@ app.get('/api/cashapp/avatar', async (req, res) => {
   }
 });
 
-// Serve static assets after API routes so /api paths aren't intercepted
-app.use(express.static(path.join(__dirname)));
+// Serve install-critical PWA files with explicit content types and caching.
+// Vercel packages these files through vercel.json's includeFiles setting.
+app.get('/site.webmanifest', (req, res) => {
+  res.type('application/manifest+json');
+  res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+  res.sendFile(path.join(__dirname, 'site.webmanifest'));
+});
+
+app.get('/sw.js', (req, res) => {
+  res.type('application/javascript');
+  res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+  res.setHeader('Service-Worker-Allowed', '/');
+  res.sendFile(path.join(__dirname, 'sw.js'));
+});
+
+// Serve remaining static assets after API routes so /api paths aren't intercepted.
+app.use(express.static(path.join(__dirname), {
+  setHeaders(res, filePath) {
+    if (/\/(icon-192|icon-512|apple-touch-icon)\.png$/.test(filePath)) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    }
+  }
+}));
 
 // Export for Vercel serverless
 module.exports = app;
