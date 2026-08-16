@@ -10,6 +10,10 @@ const MongoStore = require('connect-mongo');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Vercel terminates HTTPS before forwarding requests to Express. Trust the
+// first proxy so secure session cookies are issued correctly in production.
+app.set('trust proxy', 1);
+
 // ── MongoDB User Schema ────────────────────────────────────────────────────
 const userSchema = new mongoose.Schema({
   username:         { type: String, required: true, unique: true },
@@ -55,13 +59,14 @@ if (mongoUri) {
       mongoOptions: { maxPoolSize: 3, minPoolSize: 0 },
     }),
     secret: process.env.SESSION_SECRET || 'cash-clone-secret-2024',
+    proxy: true,
     resave: false,
     saveUninitialized: false,
     name: 'connect.sid',
     cookie: {
       maxAge: 30 * 24 * 60 * 60 * 1000,
       httpOnly: true,
-      secure: false,
+      secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       path: '/'
     }
@@ -229,7 +234,12 @@ async function requireAdmin(req, res, next) {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { username, password, deviceId } = req.body;
-    console.log('🔐 Login attempt:', { username, hasPassword: !!password, deviceId, mongoUri });
+    console.log('🔐 Login attempt:', {
+      username,
+      hasPassword: !!password,
+      deviceId,
+      mongoConfigured: !!mongoUri
+    });
 
     if (!mongoUri) {
       console.error('❌ Database not configured');
@@ -339,7 +349,12 @@ app.post('/api/auth/logout', (req, res) => {
     if (err) {
       return res.status(500).json({ error: 'Logout failed' });
     }
-    res.clearCookie('connect.sid');
+    res.clearCookie('connect.sid', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/'
+    });
     res.json({ success: true });
   });
 });

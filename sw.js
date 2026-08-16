@@ -1,6 +1,6 @@
 // Keep the app shell local after the first visit so navigation does not wait
 // for the network, CDN, or a server response.
-const CACHE_NAME = 'cashapp-shell-v4';
+const CACHE_NAME = 'cashapp-shell-v5';
 const APP_SHELL = [
   './',
   './index.html',
@@ -40,6 +40,15 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
 
+  const requestUrl = new URL(event.request.url);
+
+  // Authentication and all other API responses must always come from the
+  // server. Caching /api/auth/status can leave the UI permanently stuck in a
+  // logged-out state even after a successful login.
+  if (requestUrl.origin === self.location.origin && requestUrl.pathname.startsWith('/api/')) {
+    return;
+  }
+
   // HTML navigation is cache-first. This makes the main screens appear
   // immediately once the app has been opened, even on a slow connection.
   if (event.request.mode === 'navigate') {
@@ -57,7 +66,7 @@ self.addEventListener('fetch', (event) => {
 
   // Static files are served from cache when available, then saved after their
   // first successful request. API requests continue to use the network.
-  if (new URL(event.request.url).origin === self.location.origin) {
+  if (requestUrl.origin === self.location.origin) {
     event.respondWith(
       caches.match(event.request).then((cached) => cached || fetch(event.request)
         .then((response) => {
