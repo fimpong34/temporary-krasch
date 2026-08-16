@@ -832,23 +832,36 @@
       if (logoutBtn) {
         logoutBtn.addEventListener("click", async (e) => {
           e.preventDefault();
-          
-          // Call logout API
+          logoutBtn.style.pointerEvents = "none";
+
           try {
-            await fetch('/api/auth/logout', {
+            const response = await fetch('/api/auth/logout', {
               method: 'POST',
-              credentials: 'include'
+              credentials: 'include',
+              cache: 'no-store',
+              headers: { 'Cache-Control': 'no-cache' }
             });
+
+            if (!response.ok) {
+              throw new Error('Logout request failed');
+            }
+
+            // Remove device/session hints and cached protected pages before
+            // returning to the login entry point.
+            sessionStorage.clear();
+            localStorage.removeItem('deviceId');
+            if ('caches' in window) {
+              const cacheNames = await caches.keys();
+              await Promise.all(cacheNames.map((name) => caches.delete(name)));
+            }
+
+            // replace() prevents Back from reopening the logged-in Profile.
+            window.location.replace('/index.html?logged_out=1');
           } catch (error) {
-            console.warn('Logout API call failed:', error);
+            console.error('Logout failed:', error);
+            logoutBtn.style.pointerEvents = "";
+            alert('Unable to log out. Please check your connection and try again.');
           }
-          
-          // Clear session storage and localStorage
-          sessionStorage.clear();
-          localStorage.removeItem('deviceId');
-          
-          // Force redirect to login page
-          window.location.replace('/index.html');
         });
       }
 
