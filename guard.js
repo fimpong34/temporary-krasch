@@ -16,6 +16,8 @@
       }
     })
     .catch(function () {
-      // Leave an already-loaded page usable during a temporary offline period.
+      // Fail closed so a logged-out or unverifiable session cannot keep a
+      // protected screen such as Profile open from the service-worker cache.
+      window.location.replace('/index.html');
     });
 })();
