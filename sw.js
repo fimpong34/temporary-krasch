@@ -1,17 +1,7 @@
-// Keep the app shell local after the first visit so navigation does not wait
-// for the network, CDN, or a server response.
-const CACHE_NAME = 'cashapp-shell-v5';
+// Cache immutable/static assets only. Protected HTML must always be fetched
+// from the network so an old authenticated screen can never be replayed.
+const CACHE_NAME = 'cashapp-shell-v6';
 const APP_SHELL = [
-  './',
-  './index.html',
-  './pay.html',
-  './home.html',
-  './contact-pay.html',
-  './activty.html',
-  './card.html',
-  './profile.html',
-  './article.html',
-  './savings.html',
   './saving.css',
   './dark-mode.js',
   './footer.display.js',
@@ -49,17 +39,14 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // HTML navigation is cache-first. This makes the main screens appear
-  // immediately once the app has been opened, even on a slow connection.
+  // Never cache document navigation. This prevents stale/broken pages and
+  // authenticated Profile/Activity screens from surviving a logout/deploy.
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      caches.match(event.request).then((cached) => cached || fetch(event.request)
-        .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-          return response;
-        })
-        .catch(() => caches.match('./pay.html')))
+      fetch(event.request).catch(() => new Response(
+        '<!doctype html><meta name="viewport" content="width=device-width"><title>Offline</title><p>You are offline. Reconnect and reload this page.</p>',
+        { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+      ))
     );
     return;
   }

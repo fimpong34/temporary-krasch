@@ -851,8 +851,14 @@
             sessionStorage.clear();
             localStorage.removeItem('deviceId');
             if ('caches' in window) {
-              const cacheNames = await caches.keys();
-              await Promise.all(cacheNames.map((name) => caches.delete(name)));
+              try {
+                const cacheNames = await caches.keys();
+                await Promise.all(cacheNames.map((name) => caches.delete(name)));
+              } catch (cacheError) {
+                // Cache cleanup is optional; a successful server logout must
+                // always continue to the login screen.
+                console.warn('Cache cleanup after logout failed:', cacheError);
+              }
             }
 
             // replace() prevents Back from reopening the logged-in Profile.

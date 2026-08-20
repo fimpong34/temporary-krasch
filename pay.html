@@ -15,14 +15,14 @@
     <link rel="prefetch" href="contact-pay.html" as="document" />
     <link rel="prefetch" href="home.html" as="document" />
     <link rel="prefetch" href="card.html" as="document" />
-    <link rel="prefetch" href="activty.html" as="document" />
+    <link rel="prefetch" href="activity.html" as="document" />
     <link rel="prefetch" href="profile.html" as="document" />
     <link rel="preload" href="font/CashSans.ttf" as="font" type="font/ttf" crossorigin />
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com; font-src 'self' https://cdnjs.cloudflare.com https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://localhost:5174 https://*.render.com;">
     <link rel="prefetch" href="home.html" as="document">
-<link rel="prefetch" href="activty.html" as="document">
+<link rel="prefetch" href="activity.html" as="document">
     <script>
       (() => {
         const KEY = "cashAppDarkMode";
@@ -2214,7 +2214,7 @@
             />
           </svg>
         </button>
-        <a href="activty.html">
+        <a href="activity.html">
           <button class="nav-button" aria-label="Activity">
             <svg width="22" height="22" viewBox="0 0 24 25">
               <path
@@ -3337,7 +3337,7 @@
         }
       }
 
-      /* Record the completed payment so it shows up in Activity (activty.html) */
+      /* Record the completed payment so it shows up in Activity (activity.html) */
       const TRANSACTIONS_KEY = 'cashAppTransactions';
       function saveM2Transaction() {
         const amount = parseFloat(m2Amt) || 0;
@@ -4033,7 +4033,7 @@
           receiptFrameReady = true;
           applyReceiptFrameTheme();
         });
-        receiptFrame.setAttribute('src', 'activty.html');
+        receiptFrame.setAttribute('src', 'activity.html');
       }
       warmReceiptFrame();
 
@@ -4068,7 +4068,7 @@
       const receiptBtn = document.querySelector('.m2-receipt-btn');
       if (receiptBtn) {
         receiptBtn.addEventListener('click', () => {
-          window.location.assign('activty.html');
+          window.location.assign('activity.html');
         });
       }
       if (receiptBackdrop) receiptBackdrop.addEventListener('click', closeReceiptSheet);

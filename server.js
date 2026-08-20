@@ -24,9 +24,9 @@ const userSchema = new mongoose.Schema({
   duration_minutes: { type: Number, default: 30 },
   created_at:       { type: Date, default: Date.now },
   last_login:       { type: Date, default: null },
-  // Tracks the currently-active session id for single-session enforcement.
-  // When a user logs in from a new device, this is overwritten, and any
-  // request from an old session id is treated as unauthenticated.
+  // Retained for compatibility with existing user records. Authentication no
+  // longer relies on this value because rotating it caused valid sessions to
+  // be logged out unexpectedly.
   active_session_id:{ type: String, default: null },
 });
 const User = mongoose.model('User', userSchema);
@@ -161,14 +161,6 @@ async function requireAuth(req, res, next) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Single-session enforcement: if this session id is no longer the
-    // user's active session, the user has been logged in elsewhere.
-    // Admins are exempt so they can manage multiple tabs.
-    if (user.role !== 'admin' && user.active_session_id && user.active_session_id !== req.sessionID) {
-      req.session.destroy(() => {});
-      return res.status(401).json({ error: 'Session replaced by new login', kicked: true });
-    }
-
     if (hasUserExpired(user)) {
       await deactivateExpiredUser(user._id);
       return destroyExpiredSession(req, res);
@@ -270,36 +262,13 @@ app.post('/api/auth/login', async (req, res) => {
 
     console.log('✅ Login successful for:', username, 'role:', user.role);
 
-    // Regenerate the session id so the new login always gets a fresh id,
-    // making the kick-out filter precise.
+    // Regenerate the session id after authentication to prevent session
+    // fixation while allowing other valid device sessions to remain active.
     await new Promise((resolve) => req.session.regenerate(() => resolve()));
 
-    // Kick out old device sessions for this user (except admin).
-    // We match both stored-as-object and stored-as-string session formats.
-    if (user.role !== 'admin') {
-      try {
-        const result = await mongoose.connection.db.collection('sessions').deleteMany({
-          $and: [
-            { _id: { $ne: req.sessionID } },
-            {
-              $or: [
-                { 'session.userId': user._id.toString() },
-                { session: { $regex: `"userId":"${user._id.toString()}"` } },
-              ],
-            },
-          ],
-        });
-        console.log('🔄 Kicked out old device sessions for user:', user._id.toString(), 'deleted:', result.deletedCount);
-      } catch (err) {
-        console.error('⚠️  Error removing old sessions:', err);
-      }
-    }
-
-    // Update last login / set expiry on first login, and record this session
-    // id as the user's single active session.
+    // Update last login and set expiry on first login.
     const userUpdates = { last_login: new Date() };
     if (user.role !== 'admin') {
-      userUpdates.active_session_id = req.sessionID;
       if (!user.expires_at) {
         const expiresAt = new Date(Date.now() + (user.duration_minutes || 30) * 60 * 1000);
         userUpdates.expires_at = expiresAt;
@@ -388,16 +357,6 @@ app.get('/api/auth/status', async (req, res) => {
   if (!user) {
     console.log('❌ User not found in database');
     return res.json({ authenticated: false });
-  }
-
-  // Single-session enforcement: if this session is no longer the user's
-  // active session, force-logout this client. Admins are exempt.
-  if (user.role !== 'admin' && user.active_session_id && user.active_session_id !== req.sessionID) {
-    console.log('🚪 Session kicked out (replaced by newer login):', user.username);
-    return req.session.destroy(() => {
-      res.clearCookie('connect.sid');
-      res.json({ authenticated: false, kicked: true });
-    });
   }
 
   if (hasUserExpired(user)) {
@@ -1221,9 +1180,18 @@ app.get('/sw.js', (req, res) => {
   res.sendFile(path.join(__dirname, 'sw.js'));
 });
 
+// Preserve old bookmarks and installed-PWA links that used the misspelled
+// filename while keeping one canonical Activity URL going forward.
+app.get('/activty.html', (req, res) => {
+  res.redirect(308, '/activity.html');
+});
+
 // Serve remaining static assets after API routes so /api paths aren't intercepted.
 app.use(express.static(path.join(__dirname), {
   setHeaders(res, filePath) {
+    if (/\.html$/.test(filePath)) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    }
     if (/\/(icon-192|icon-512|apple-touch-icon)\.png$/.test(filePath)) {
       res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     }
