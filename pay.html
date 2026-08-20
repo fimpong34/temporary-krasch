@@ -3475,10 +3475,9 @@
         };
       }
       function renderResultsWithFallback(list, rawQuery) {
-        // If we have any real results, just show them as-is.
-        if (list && list.length) { renderResults(list); return; }
-        // Otherwise, synthesize a tappable entry for whatever the user typed
-        // so "No results" never appears for a plausible cashtag.
+        // A typed remote search always resolves to exactly one row. If the
+        // selected platform has no real account, show the typed username with
+        // its first-letter avatar instead of appending saved/local contacts.
         const stub = makeSynthesizedCashAppProfile(rawQuery);
         renderResults(stub ? [stub] : []);
       }
@@ -3516,14 +3515,11 @@
             platform: 'cashapp'
           };
 
-          // Always prefer the refreshed live result over an older saved
-          // contact with the same name/cashtag.
-          const dedupedBase = baseList.filter((contact) => {
-            const name = String(contact.name || '').toLowerCase();
-            const handle = String(contact.cashtag || '').toLowerCase().replace(/^[$@]/, '');
-            return name !== fullName && name !== username && handle !== username;
-          });
-          renderResults([liveProfile].concat(dedupedBase));
+          if (result.fallback) {
+            renderResultsWithFallback([], rawForFallback);
+            return;
+          }
+          renderResults([liveProfile]);
         } catch (error) {
           if (lookupToken !== m2SearchLookupToken) return;
           if (!noFallback && cashtag.length >= 3) {
@@ -3561,12 +3557,11 @@
             color: '#6c757d',
             platform: 'tiktok'
           };
-          const topKey = String(tiktokProfile.cashtag || tiktokProfile.name || '').toLowerCase().replace(/^[$@]/, '');
-          const dedupedBase = baseList.filter((contact) => {
-            const k = String(contact.cashtag || contact.name || '').toLowerCase().replace(/^[$@]/, '');
-            return k !== topKey;
-          });
-          renderResults([tiktokProfile].concat(dedupedBase));
+          if (result.fallback) {
+            renderResultsWithFallback([], rawForFallback);
+            return;
+          }
+          renderResults([tiktokProfile]);
         } catch (error) {
           if (lookupToken !== m2SearchLookupToken) return;
           if (allowSynthesized) renderResultsWithFallback(baseList, rawForFallback);
@@ -3575,8 +3570,8 @@
       }
 
       async function enrichBothProfiles(query, baseList) {
-        // Fetch both platforms concurrently. Cash App and TikTok accounts may
-        // share the same handle; they remain separate selectable results.
+        // Query both platforms concurrently, then resolve to one best match.
+        // A Cash App fallback must not hide a genuine TikTok match.
         const username = (query || '').replace(/^[$@]+/, '').trim();
         if (username.length < 2) return;
         const myToken = ++m2SearchLookupToken;
@@ -3589,11 +3584,11 @@
           ]);
           if (myToken !== m2SearchLookupToken) return;
 
-          const combined = [];
-          const cashOk = cashResp && cashResp.success && cashResp.data;
+          let cashProfile = null;
+          const cashOk = cashResp && cashResp.success && cashResp.data && !cashResp.fallback;
           if (cashOk) {
             const u = (cashResp.data.username || username).toLowerCase();
-            combined.push({
+            cashProfile = {
               id: `cashapp-${u}`,
               name: cashResp.data.fullName || `$${cashResp.data.username || username}`,
               cashtag: cashResp.data.displayTag || `$${cashResp.data.username || username}`,
@@ -3602,13 +3597,14 @@
               accentColor: cashResp.data.accentColor || '',
               color: cashResp.data.accentColor || '#00D54B',
               platform: 'cashapp',
-              fallback: !!cashResp.fallback,
-            });
+            };
           }
 
-          if (tikResp && tikResp.success && tikResp.data) {
+          let tiktokProfile = null;
+          const tiktokOk = tikResp && tikResp.success && tikResp.data && !tikResp.fallback;
+          if (tiktokOk) {
             const u = (tikResp.data.username || username).toLowerCase();
-            combined.push({
+            tiktokProfile = {
               id: `tiktok-${u}`,
               name: tikResp.data.nickname || `@${tikResp.data.username || username}`,
               cashtag: `@${tikResp.data.username || username}`,
@@ -3616,16 +3612,15 @@
               color: '#6c757d',
               platform: 'tiktok',
               stats: { followers: tikResp.data.followers, likes: tikResp.data.likes },
-            });
+            };
           }
 
-          const remoteKeys = new Set(combined.map((profile) =>
-            String(profile.cashtag || '').toLowerCase().replace(/^[$@]/, '')
-          ));
-          const dedupedBase = baseList.filter((contact) =>
-            !remoteKeys.has(String(contact.cashtag || contact.name || '').toLowerCase().replace(/^[$@]/, ''))
-          );
-          renderResults(combined.length ? combined.concat(dedupedBase) : [makeSynthesizedCashAppProfile(`$${username}`)].filter(Boolean).concat(dedupedBase));
+          // Preserve the old Cash-first behavior when both platforms genuinely
+          // own the same username, otherwise choose whichever platform matched.
+          const matchedProfile = cashProfile || tiktokProfile;
+          renderResults(matchedProfile
+            ? [matchedProfile]
+            : [makeSynthesizedCashAppProfile(`$${username}`)].filter(Boolean));
         } catch (e) {
           if (myToken !== m2SearchLookupToken) return;
           renderResultsWithFallback(baseList, `$${username}`);
@@ -3666,7 +3661,9 @@
             return (c.name||'').toLowerCase().includes(q) ||
                    (c.cashtag||'').toLowerCase().replace(/^[$@]/,'').includes(q);
           });
-          renderResults(filtered);
+          // While the remote lookup is pending, keep the search sheet to one
+          // candidate as well; the final result will replace it shortly.
+          renderResults(filtered.slice(0, 1));
           // Show spinner immediately so the user gets feedback during the debounce wait
           if (!filtered.length) showSpinner();
           // Debounce the remote lookup: only fire ~280ms after the user stops typing.
