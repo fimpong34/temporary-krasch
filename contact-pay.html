@@ -1595,7 +1595,7 @@
 
           // Use Cash App profile lookup for cashtags (with or without $ prefix)
           // This allows users to type "rose" or "$rose" to find Cash App profiles
-          if (normalizedHandle.length >= 1 && !trimmedValue.startsWith('@')) {
+          if (normalizedHandle.length >= 2 && !trimmedValue.startsWith('@')) {
             runCashAppProfileLookup(trimmedValue);
             return;
           }
@@ -1642,7 +1642,7 @@
           }
           typedRecipientUpdateTimer = setTimeout(() => {
             updateTypedRecipientPreview(rawValue, useTikTokLookup);
-          }, useTikTokLookup ? 400 : 250);
+          }, useTikTokLookup ? 400 : 450);
         }
 
         async function runTikTokProfileLookup(rawValue) {
@@ -1756,7 +1756,7 @@
 
         async function runCashAppProfileLookup(rawValue) {
           const cashtag = rawValue.replace(/^\$+/, "").trim();
-          if (!cashtag || cashtag.length < 1) {
+          if (!cashtag || cashtag.length < 2) {
             clearTypedRecipientPreview();
             return;
           }
@@ -1806,8 +1806,9 @@
                 return;
               }
               
-              // If CashApp returned no avatar, try TikTok lookup instead
-              if (!result.data.avatar && cashtag.length >= 3) {
+              // Only a real Cash App response missing an avatar may fall back
+              // to TikTok. A 403-safe typed cashtag must remain Cash App.
+              if (!result.fallback && !result.data.avatar && cashtag.length >= 3) {
                 runTikTokProfileLookup(`@${cashtag}`);
                 return;
               }

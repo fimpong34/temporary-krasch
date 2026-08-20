@@ -1,11 +1,10 @@
 require('dotenv').config();
 const express = require('express');
-const session = require('express-session');
+const cookieSession = require('cookie-session');
 const bcrypt = require('bcryptjs'); // pure JS — works on Vercel serverless
 const cors = require('cors');
 const path = require('path');
 const mongoose = require('mongoose');
-const MongoStore = require('connect-mongo');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -41,60 +40,41 @@ async function connectDB() {
   if (!mongoUri) throw new Error('MONGO_URI not set');
   if (mongoose.connection.readyState === 1) return; // already connected
   if (!_connPromise) {
-    _connPromise = mongoose.connect(mongoUri, { maxPoolSize: 5, minPoolSize: 0, serverSelectionTimeoutMS: 10000 }).then(() => {
+    _connPromise = mongoose.connect(mongoUri, {
+      // M0 has a small connection budget. Keep the serverless pool tiny and
+      // release idle sockets instead of retaining five per warm function.
+      maxPoolSize: 1,
+      minPoolSize: 0,
+      maxIdleTimeMS: 30000,
+      serverSelectionTimeoutMS: 8000,
+      connectTimeoutMS: 8000,
+    }).then(() => {
       console.log('✅ MongoDB connected successfully');
+    }).catch((error) => {
+      // A rejected cached promise would otherwise poison the warm function
+      // forever. Allow the next auth request to reconnect cleanly.
+      _connPromise = null;
+      throw error;
     });
   }
   await _connPromise;
 }
 
-// ── Session setup ──────────────────────────────────────────────────────────
-if (mongoUri) {
-  const sessionConfig = {
-    store: MongoStore.create({
-      mongoUrl: mongoUri,
-      collectionName: 'sessions',
-      // Re-use a small dedicated pool just for sessions; without this it would
-      // open another default pool of 100 connections.
-      mongoOptions: { maxPoolSize: 3, minPoolSize: 0 },
-    }),
-    secret: process.env.SESSION_SECRET || 'cash-clone-secret-2024',
-    proxy: true,
-    resave: false,
-    saveUninitialized: false,
-    name: 'connect.sid',
-    cookie: {
-      maxAge: 30 * 24 * 60 * 60 * 1000,
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      path: '/'
-    }
-  };
+// ── Stateless signed session setup ─────────────────────────────────────────
+// The session payload is tiny and signed in the browser cookie. This removes
+// connect-mongo's second Atlas client entirely while remaining consistent
+// across Vercel instances (unlike an in-memory session store).
+const authSession = cookieSession({
+  name: 'cash.session',
+  keys: [process.env.SESSION_SECRET || 'cash-clone-secret-2024'],
+  maxAge: 30 * 24 * 60 * 60 * 1000,
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'lax',
+  path: '/',
+});
 
-  console.log('🍪 Session cookie config:', {
-    secure: sessionConfig.cookie.secure,
-    sameSite: sessionConfig.cookie.sameSite,
-    httpOnly: sessionConfig.cookie.httpOnly,
-    name: sessionConfig.name
-  });
-
-  app.use(session(sessionConfig));
-} else {
-  console.log('⚠️  No MONGO_URI found - running in local dev mode without database');
-  app.use(session({
-    secret: 'cash-clone-dev-secret',
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      maxAge: 24 * 60 * 60 * 1000,
-      httpOnly: true
-    }
-  }));
-}
-
-// ── DB connection middleware (runs before every request on Vercel) ─────────
-app.use(async (req, res, next) => {
+async function useAuthDatabase(req, res, next) {
   if (!mongoUri) return next(); // dev mode without DB
   try {
     await connectDB();
@@ -103,7 +83,7 @@ app.use(async (req, res, next) => {
     console.error('❌ DB connection failed:', err.message);
     res.status(503).json({ error: 'Database unavailable' });
   }
-});
+}
 
 // Middleware
 app.use(cors({
@@ -143,6 +123,10 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Only authentication and user administration use Atlas. Cash App/TikTok
+// lookups and every static asset bypass both session storage and Mongoose.
+app.use(['/api/auth', '/api/users'], authSession, useAuthDatabase);
+
 // Auth middleware
 async function requireAuth(req, res, next) {
   if (!req.session.userId) {
@@ -157,7 +141,7 @@ async function requireAuth(req, res, next) {
     const user = await User.findById(req.session.userId).select('role expires_at active_session_id');
 
     if (!user) {
-      req.session.destroy(() => {});
+      req.session = null;
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
@@ -194,16 +178,8 @@ async function deactivateExpiredUser(userId) {
 }
 
 function destroyExpiredSession(req, res, payload = {}) {
-  return new Promise((resolve) => {
-    req.session.destroy((err) => {
-      if (err) {
-        console.error('Session destroy error:', err);
-      }
-      res.clearCookie('connect.sid');
-      res.status(440).json({ authenticated: false, reason: 'expired', ...payload });
-      resolve();
-    });
-  });
+  req.session = null;
+  return res.status(440).json({ authenticated: false, reason: 'expired', ...payload });
 }
 
 async function requireAdmin(req, res, next) {
@@ -262,10 +238,6 @@ app.post('/api/auth/login', async (req, res) => {
 
     console.log('✅ Login successful for:', username, 'role:', user.role);
 
-    // Regenerate the session id after authentication to prevent session
-    // fixation while allowing other valid device sessions to remain active.
-    await new Promise((resolve) => req.session.regenerate(() => resolve()));
-
     // Update last login and set expiry on first login.
     const userUpdates = { last_login: new Date() };
     if (user.role !== 'admin') {
@@ -278,33 +250,24 @@ app.post('/api/auth/login', async (req, res) => {
     }
     await User.findByIdAndUpdate(user._id, userUpdates);
 
-    req.session.userId = user._id.toString();
-    req.session.username = user.username;
-    req.session.role = user.role;
-    req.session.deviceId = deviceId;
+    req.session = {
+      userId: user._id.toString(),
+      username: user.username,
+      role: user.role,
+      deviceId,
+    };
 
-    console.log('📝 Session created:', { userId: user._id, username: user.username, role: user.role, deviceId, sessionID: req.sessionID });
+    console.log('📝 Signed session created:', { userId: user._id, username: user.username, role: user.role, deviceId });
 
-    // Save session explicitly before responding
-    req.session.save((err) => {
-      if (err) {
-        console.error('❌ Session save error:', err);
-        return res.status(500).json({ error: 'Session save failed', message: err.message });
+    res.json({
+      success: true,
+      message: 'Login successful',
+      user: {
+        id: user._id,
+        username: user.username,
+        role: user.role,
+        expiresAt: user.expires_at
       }
-
-      console.log('✅ Session saved successfully');
-      console.log('🍪 Response headers will include Set-Cookie');
-
-      res.json({
-        success: true,
-        message: 'Login successful',
-        user: {
-          id: user._id,
-          username: user.username,
-          role: user.role,
-          expiresAt: user.expires_at
-        }
-      });
     });
   } catch (error) {
     console.error('❌ Login error:', error);
@@ -314,18 +277,8 @@ app.post('/api/auth/login', async (req, res) => {
 
 // Logout
 app.post('/api/auth/logout', (req, res) => {
-  req.session.destroy((err) => {
-    if (err) {
-      return res.status(500).json({ error: 'Logout failed' });
-    }
-    res.clearCookie('connect.sid', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      path: '/'
-    });
-    res.json({ success: true });
-  });
+  req.session = null;
+  res.json({ success: true });
 });
 
 // Check auth status
@@ -337,9 +290,7 @@ app.get('/api/auth/status', async (req, res) => {
 
   console.log('🔍 Auth status check:', {
     hasSession: !!req.session,
-    sessionId: req.sessionID,
     userId: req.session?.userId,
-    cookies: req.headers.cookie?.substring(0, 50)
   });
 
   if (!req.session.userId) {
@@ -563,18 +514,19 @@ app.delete('/api/users/:id', requireAdmin, async (req, res) => {
 // In-memory cache: username -> { data, ts }
 const profileCache = new Map();
 const PROFILE_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+const PROFILE_FALLBACK_TTL = 10 * 1000; // Retry blocked lookups quickly
 
 // Clean expired cache entries every 5 minutes
 setInterval(() => {
   const now = Date.now();
   for (const [k, v] of profileCache) {
-    if (now - v.ts > PROFILE_CACHE_TTL) profileCache.delete(k);
+    if (now - v.ts > (v.ttl || PROFILE_CACHE_TTL)) profileCache.delete(k);
   }
 }, 5 * 60 * 1000);
 
 const normalizeCount = (value) => {
   if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : 0;
+    return Number.isFinite(value) && value >= 0 ? value : 0;
   }
 
   if (typeof value === 'string') {
@@ -587,17 +539,18 @@ const normalizeCount = (value) => {
 
       const multipliers = { K: 1_000, M: 1_000_000, B: 1_000_000_000 };
       const multiplier = match[2] ? multipliers[match[2]] : 1;
-      return Math.round(base * multiplier);
+      return Math.max(0, Math.round(base * multiplier));
     }
 
     const numeric = Number(trimmed.replace(/[^0-9]/g, ''));
-    return Number.isFinite(numeric) ? numeric : 0;
+    return Number.isFinite(numeric) && numeric >= 0 ? numeric : 0;
   }
 
   return 0;
 };
 
 const formatCount = (count) => {
+  if (!Number.isFinite(count) || count < 0) count = 0;
   if (count >= 1_000_000_000) return (count / 1_000_000_000).toFixed(1) + 'B';
   if (count >= 1_000_000) return (count / 1_000_000).toFixed(1) + 'M';
   if (count >= 1_000) return (count / 1_000).toFixed(1) + 'K';
@@ -633,9 +586,9 @@ async function scrapeEmbedProfile(username) {
       avatarRaw = avatarRaw.replace(/\\u0026/g, '&');
     }
 
-    const followerCount = Number(userInfo.followerCount) || 0;
-    const followingCount = Number(userInfo.followingCount) || 0;
-    const likesCount = Number(userInfo.heartCount) || 0;
+    const followerCount = normalizeCount(userInfo.followerCount);
+    const followingCount = normalizeCount(userInfo.followingCount);
+    const likesCount = normalizeCount(userInfo.heartCount);
 
     if (!avatarRaw && !userInfo.nickname) return null;
 
@@ -776,6 +729,7 @@ async function buildTikTokProfile(username) {
     followingCount: embed?.followingCount || scraped?.followingCount || 0,
     likes: embed?.likes || scraped?.likes || '0',
     likesCount: embed?.likesCount || scraped?.likesCount || 0,
+    fallback: true,
   };
 }
 
@@ -794,14 +748,21 @@ app.get('/api/tiktok/profile/:username', async (req, res) => {
 
   // Return cached result if available
   const cached = profileCache.get(cleanUsername.toLowerCase());
-  if (cached && Date.now() - cached.ts < PROFILE_CACHE_TTL) {
-    return res.json({ success: true, data: cached.data });
+  if (cached && Date.now() - cached.ts < (cached.ttl || PROFILE_CACHE_TTL)) {
+    return res.json({ success: true, fallback: !!cached.data.fallback, data: cached.data });
   }
 
   try {
     const profile = await buildTikTokProfile(cleanUsername);
-    profileCache.set(cleanUsername.toLowerCase(), { data: profile, ts: Date.now() });
-    return res.json({ success: true, data: profile });
+    profileCache.set(cleanUsername.toLowerCase(), {
+      data: profile,
+      ts: Date.now(),
+      ttl: profile.fallback ? PROFILE_FALLBACK_TTL : PROFILE_CACHE_TTL,
+    });
+    if (!profile.fallback) {
+      res.set('CDN-Cache-Control', 'public, s-maxage=600, stale-while-revalidate=3600');
+    }
+    return res.json({ success: true, fallback: !!profile.fallback, data: profile });
   } catch (err) {
     console.error('TikTok profile fetch error:', err.message);
     return res.json({
@@ -861,10 +822,6 @@ const CASHAPP_UAS = [
 // Cache for Cash App profiles
 const cashappProfileCache = new Map();
 const CASHAPP_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
-// Short negative cache: prevent slamming cash.app when a cashtag genuinely
-// doesn't exist (or while user is mid-typing). Cleared on the next miss after TTL.
-const cashappNegativeCache = new Map();
-const CASHAPP_NEG_CACHE_TTL = 30 * 1000; // 30 seconds
 // In-flight deduplication: concurrent requests for the same cashtag share
 // the same upstream scrape promise. Cleared once it settles.
 const cashappInflight = new Map();
@@ -875,22 +832,16 @@ setInterval(() => {
   for (const [k, v] of cashappProfileCache) {
     if (now - v.ts > CASHAPP_CACHE_TTL) cashappProfileCache.delete(k);
   }
-  for (const [k, v] of cashappNegativeCache) {
-    if (now - v.ts > CASHAPP_NEG_CACHE_TTL) cashappNegativeCache.delete(k);
-  }
 }, 5 * 60 * 1000);
-
-function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 async function fetchCashAppHTML(cashtag, debugInfo) {
   // Try multiple UAs in case Cash App returns a stripped page (e.g. just the
   // React shell with no `var profile = {...}` block) for one UA. Datacenter
   // IPs sometimes get challenge pages on the mobile UA; desktop Chrome is
   // usually the most reliable.
-  // Retry the whole UA cycle up to 3 times with backoff to handle transient
-  // throttling / 5xx from cash.app — this is what makes the lookup
-  // bullet-proof from any customer device or VPN.
-  const MAX_ROUNDS = 3;
+  // Cash App commonly rejects datacenter traffic with 403. One UA cycle is
+  // enough to detect that; nine retries only amplify throttling and latency.
+  const MAX_ROUNDS = 1;
   let lastErr = null;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     for (const ua of CASHAPP_UAS) {
@@ -910,6 +861,7 @@ async function fetchCashAppHTML(cashtag, debugInfo) {
             'Upgrade-Insecure-Requests': '1',
           },
           redirect: 'follow',
+          signal: AbortSignal.timeout(8000),
         });
         if (!response.ok) {
           lastErr = `status_${response.status}`;
@@ -935,7 +887,6 @@ async function fetchCashAppHTML(cashtag, debugInfo) {
           status: response.status,
           bytes: html.length,
           hasJson, hasTestid, hasFormatted,
-          snippet: html.slice(0, 400),
         });
         if (usable) return html;
         lastErr = 'unusable_html';
@@ -944,11 +895,6 @@ async function fetchCashAppHTML(cashtag, debugInfo) {
         if (debugInfo) debugInfo.attempts.push({ round, ua: ua.slice(0, 30), error: lastErr });
         console.warn(`[cashapp] $${cashtag} fetch threw round=${round}: ${lastErr}`);
       }
-    }
-    // Backoff before the next round: 150ms, 450ms (with light jitter)
-    if (round < MAX_ROUNDS - 1) {
-      const backoff = 150 * Math.pow(3, round) + Math.floor(Math.random() * 100);
-      await sleep(backoff);
     }
   }
   if (debugInfo) debugInfo.lastErr = lastErr;
@@ -1076,7 +1022,7 @@ app.get('/api/cashapp/profile/:cashtag', async (req, res) => {
   res.set('Pragma', 'no-cache');
   res.set('Expires', '0');
   // Build marker so we can confirm a fresh deploy is live from the browser.
-  res.set('X-Cashapp-Lookup-Build', '2026-06-12-bulletproof');
+  res.set('X-Cashapp-Lookup-Build', '2026-08-20-resilient');
 
   const rawCashtag = req.params.cashtag || '';
   const cleanCashtag = rawCashtag.replace(/^\$+/, '').trim();
@@ -1091,17 +1037,21 @@ app.get('/api/cashapp/profile/:cashtag', async (req, res) => {
   const debugInfo = wantDebug ? { attempts: [], lastErr: null } : null;
   const key = cleanCashtag.toLowerCase();
 
+  const fallbackProfile = () => ({
+    username: cleanCashtag,
+    fullName: `$${cleanCashtag}`,
+    displayTag: `$${cleanCashtag}`,
+    avatar: '',
+    initial: cleanCashtag.charAt(0).toUpperCase(),
+    accentColor: '',
+    isVerified: false,
+  });
+
   // Positive cache: serve a previously-resolved profile immediately.
   if (!skipCache) {
     const cached = cashappProfileCache.get(key);
     if (cached && Date.now() - cached.ts < CASHAPP_CACHE_TTL) {
       return res.json({ success: true, data: cached.data, cached: true });
-    }
-    // Short negative cache: a known-missing cashtag — don't re-hit cash.app
-    // for 30s. Prevents hammering when the user is mid-typing.
-    const neg = cashappNegativeCache.get(key);
-    if (neg && Date.now() - neg.ts < CASHAPP_NEG_CACHE_TTL) {
-      return res.json({ success: false, notFound: true, cached: true });
     }
   }
 
@@ -1120,15 +1070,14 @@ app.get('/api/cashapp/profile/:cashtag', async (req, res) => {
 
     if (profile) {
       cashappProfileCache.set(key, { data: profile, ts: Date.now() });
-      cashappNegativeCache.delete(key);
+      res.set('CDN-Cache-Control', 'public, s-maxage=600, stale-while-revalidate=3600');
       const out = { success: true, data: profile };
       if (debugInfo) out.debug = debugInfo;
       return res.json(out);
     } else {
-      // Profile not found — cache the miss briefly + return success:false so
-      // the client can fall back (e.g., to TikTok).
-      cashappNegativeCache.set(key, { ts: Date.now() });
-      const out = { success: false, notFound: true };
+      // Cash App may block server lookups even for valid cashtags. Preserve a
+      // usable Cash App recipient instead of hiding it or changing platforms.
+      const out = { success: true, fallback: true, data: fallbackProfile() };
       if (debugInfo) out.debug = debugInfo;
       return res.json(out);
     }
@@ -1178,6 +1127,17 @@ app.get('/sw.js', (req, res) => {
   res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
   res.setHeader('Service-Worker-Allowed', '/');
   res.sendFile(path.join(__dirname, 'sw.js'));
+});
+
+// iOS must receive Pay as an inline HTML page. Serving it explicitly also
+// prevents an interrupted/static fallback response from being interpreted by
+// Quick Look as a downloaded zero-byte `pay.html` document.
+app.get('/pay.html', (req, res) => {
+  res.type('html');
+  res.setHeader('Content-Disposition', 'inline; filename="pay.html"');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.sendFile(path.join(__dirname, 'pay.html'));
 });
 
 // Preserve old bookmarks and installed-PWA links that used the misspelled

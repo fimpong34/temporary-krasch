@@ -1,6 +1,6 @@
 // Cache immutable/static assets only. Protected HTML must always be fetched
 // from the network so an old authenticated screen can never be replayed.
-const CACHE_NAME = 'cashapp-shell-v6';
+const CACHE_NAME = 'cashapp-shell-v7';
 const APP_SHELL = [
   './saving.css',
   './dark-mode.js',
@@ -43,10 +43,32 @@ self.addEventListener('fetch', (event) => {
   // authenticated Profile/Activity screens from surviving a logout/deploy.
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request).catch(() => new Response(
-        '<!doctype html><meta name="viewport" content="width=device-width"><title>Offline</title><p>You are offline. Reconnect and reload this page.</p>',
-        { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
-      ))
+      fetch(event.request, { cache: 'no-store' })
+        .then((response) => {
+          const contentType = response.headers.get('content-type') || '';
+          const contentLength = Number(response.headers.get('content-length'));
+          const isEmpty = Number.isFinite(contentLength) && contentLength === 0;
+
+          if (!response.ok || !contentType.includes('text/html') || isEmpty) {
+            throw new Error('Invalid navigation response');
+          }
+          return response;
+        })
+        // iOS can occasionally surface an interrupted navigation as a
+        // zero-byte document. Retry once from the network before showing a
+        // real HTML offline screen.
+        .catch(() => fetch(event.request, { cache: 'reload' }))
+        .then((response) => {
+          const contentType = response.headers.get('content-type') || '';
+          if (!response.ok || !contentType.includes('text/html')) {
+            throw new Error('Navigation retry failed');
+          }
+          return response;
+        })
+        .catch(() => new Response(
+          '<!doctype html><meta name="viewport" content="width=device-width"><title>Connection problem</title><style>body{font:17px system-ui;padding:40px;text-align:center}button{font:inherit;padding:12px 20px}</style><h1>Connection problem</h1><p>Please reconnect and try again.</p><button onclick="location.reload()">Try again</button>',
+          { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }
+        ))
     );
     return;
   }

@@ -3505,16 +3505,6 @@
 
           const username = String(result.data.username || cashtag).toLowerCase();
           const fullName = String(result.data.fullName || '').toLowerCase();
-          const exists = baseList.some((contact) => {
-            const name = String(contact.name || '').toLowerCase();
-            const handle = String(contact.cashtag || '').toLowerCase().replace(/^[$@]/, '');
-            return name === fullName || name === username || handle === username;
-          });
-          if (exists) {
-            renderResults(baseList);
-            return;
-          }
-
           const liveProfile = {
             id: `cashapp-${username}`,
             name: result.data.fullName || `$${result.data.username || cashtag}`,
@@ -3526,7 +3516,14 @@
             platform: 'cashapp'
           };
 
-          renderResults([liveProfile].concat(baseList));
+          // Always prefer the refreshed live result over an older saved
+          // contact with the same name/cashtag.
+          const dedupedBase = baseList.filter((contact) => {
+            const name = String(contact.name || '').toLowerCase();
+            const handle = String(contact.cashtag || '').toLowerCase().replace(/^[$@]/, '');
+            return name !== fullName && name !== username && handle !== username;
+          });
+          renderResults([liveProfile].concat(dedupedBase));
         } catch (error) {
           if (lookupToken !== m2SearchLookupToken) return;
           if (!noFallback && cashtag.length >= 3) {
@@ -3556,16 +3553,6 @@
 
           const uname = String(result.data.username || username).toLowerCase();
           const nick = String(result.data.nickname || '').toLowerCase();
-          const exists = baseList.some((contact) => {
-            const name = String(contact.name || '').toLowerCase();
-            const handle = String(contact.cashtag || '').toLowerCase().replace(/^[$@]/, '');
-            return name === nick || name === uname || handle === uname;
-          });
-          if (exists && !forceTop) {
-            renderResults(baseList);
-            return;
-          }
-
           const tiktokProfile = {
             id: `tiktok-${result.data.username || username}`,
             name: result.data.nickname || `$${result.data.username || username}`,
@@ -3588,21 +3575,25 @@
       }
 
       async function enrichBothProfiles(query, baseList) {
-        // "Show both" = try Cash App first; only fall back to TikTok if Cash App
-        // returns no usable profile (no data, no full name, no avatar).
+        // Fetch both platforms concurrently. Cash App and TikTok accounts may
+        // share the same handle; they remain separate selectable results.
         const username = (query || '').replace(/^[$@]+/, '').trim();
         if (username.length < 2) return;
         const myToken = ++m2SearchLookupToken;
         try {
-          const cashResp = await fetch(`/api/cashapp/profile/${encodeURIComponent(username)}`, { cache: 'no-store' }).then(r => r.json()).catch(() => null);
+          const [cashResp, tikResp] = await Promise.all([
+            fetch(`/api/cashapp/profile/${encodeURIComponent(username)}`, { cache: 'no-store' }).then(r => r.json()).catch(() => null),
+            username.length >= 3
+              ? fetch(`/api/tiktok/profile/${encodeURIComponent(username)}`, { cache: 'no-store' }).then(r => r.json()).catch(() => null)
+              : Promise.resolve(null),
+          ]);
           if (myToken !== m2SearchLookupToken) return;
 
-          // Consider Cash App usable if it returns a valid username or fullName (avatar not required)
-          const cashOk = cashResp && cashResp.success && cashResp.data && (cashResp.data.username || cashResp.data.fullName);
+          const combined = [];
+          const cashOk = cashResp && cashResp.success && cashResp.data;
           if (cashOk) {
-            // Good Cash App profile — show it, skip TikTok
             const u = (cashResp.data.username || username).toLowerCase();
-            const liveProfile = {
+            combined.push({
               id: `cashapp-${u}`,
               name: cashResp.data.fullName || `$${cashResp.data.username || username}`,
               cashtag: cashResp.data.displayTag || `$${cashResp.data.username || username}`,
@@ -3610,33 +3601,31 @@
               initial: cashResp.data.initial || '',
               accentColor: cashResp.data.accentColor || '',
               color: cashResp.data.accentColor || '#00D54B',
-              platform: 'cashapp'
-            };
-            const key = (liveProfile.cashtag || liveProfile.name || '').toLowerCase().replace(/^[$@]/, '');
-            const dedupedBase = baseList.filter(c => (c.cashtag || c.name || '').toLowerCase().replace(/^[$@]/, '') !== key);
-            renderResults([liveProfile, ...dedupedBase]);
-          } else {
-            // No Cash App profile — fall back to TikTok
-            if (myToken !== m2SearchLookupToken) return;
-            const tikResp = await fetch(`/api/tiktok/profile/${encodeURIComponent(username)}`, { cache: 'no-store' }).then(r => r.json()).catch(() => null);
-            if (myToken !== m2SearchLookupToken) return;
-            if (tikResp && tikResp.success && tikResp.data) {
-              const u = (tikResp.data.username || username).toLowerCase();
-              const tiktokProfile = {
-                id: `tiktok-${u}`,
-                name: tikResp.data.nickname || `@${tikResp.data.username || username}`,
-                cashtag: `@${tikResp.data.username || username}`,
-                avatar: tikResp.data.avatar || '',
-                color: '#6c757d',
-                platform: 'tiktok'
-              };
-              const key = (tiktokProfile.cashtag || tiktokProfile.name || '').toLowerCase().replace(/^[$@]/, '');
-              const dedupedBase = baseList.filter(c => (c.cashtag || c.name || '').toLowerCase().replace(/^[$@]/, '') !== key);
-              renderResults([tiktokProfile, ...dedupedBase]);
-            } else {
-              renderResultsWithFallback(baseList, `$${username}`);
-            }
+              platform: 'cashapp',
+              fallback: !!cashResp.fallback,
+            });
           }
+
+          if (tikResp && tikResp.success && tikResp.data) {
+            const u = (tikResp.data.username || username).toLowerCase();
+            combined.push({
+              id: `tiktok-${u}`,
+              name: tikResp.data.nickname || `@${tikResp.data.username || username}`,
+              cashtag: `@${tikResp.data.username || username}`,
+              avatar: tikResp.data.avatar || '',
+              color: '#6c757d',
+              platform: 'tiktok',
+              stats: { followers: tikResp.data.followers, likes: tikResp.data.likes },
+            });
+          }
+
+          const remoteKeys = new Set(combined.map((profile) =>
+            String(profile.cashtag || '').toLowerCase().replace(/^[$@]/, '')
+          ));
+          const dedupedBase = baseList.filter((contact) =>
+            !remoteKeys.has(String(contact.cashtag || contact.name || '').toLowerCase().replace(/^[$@]/, ''))
+          );
+          renderResults(combined.length ? combined.concat(dedupedBase) : [makeSynthesizedCashAppProfile(`$${username}`)].filter(Boolean).concat(dedupedBase));
         } catch (e) {
           if (myToken !== m2SearchLookupToken) return;
           renderResultsWithFallback(baseList, `$${username}`);
@@ -3689,8 +3678,8 @@
               // Explicit @ prefix → TikTok only
               enrichWithTikTokProfile(q, filtered, true, { rawQuery: raw, allowSynthesized: true });
             } else if (mode === 'tiktok') {
-              // TikTok mode but no @ → still search Cash App (plain name), allow TikTok fallback
-              enrichWithCashAppProfile(q, filtered, { rawQuery: `$${q}` });
+              // TikTok-only mode always queries TikTok, with or without @.
+              enrichWithTikTokProfile(q, filtered, true, { rawQuery: `@${q}`, allowSynthesized: true });
             } else if (mode === 'both') {
               enrichBothProfiles(q, filtered);
             } else {
